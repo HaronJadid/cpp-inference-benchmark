@@ -1,6 +1,6 @@
 # C++ Inference Engine & Memory Locality Benchmark 🏎️
 
-This project explores the intersection of Low-Level Systems Engineering and Deep Learning. It features a standalone C++ inference engine for fraud detection and a benchmark suite demonstrating the physical impact of CPU cache locality on performance.
+A standalone C++ inference engine for a fraud-detection model, plus a benchmark showing how CPU cache locality and multithreading affect the performance of memory-bound code.
 
 ## 🛠️ Tech Stack
 * **Language:** C++17
@@ -9,25 +9,42 @@ This project explores the intersection of Low-Level Systems Engineering and Deep
 * **Parallelism:** OpenMP
 
 ## 🧠 Model Integration
-The project loads a pre-trained Fraud Detection model (exported from PyTorch via ONNX) and executes inference in a bare-metal environment. 
+The project loads a pre-trained fraud-detection model (a small MLP exported from PyTorch to ONNX) and runs inference natively through ONNX Runtime, with no Python involved.
 
-* **Input:** 10-feature vector
-* **Consistency Check:** C++ output matches Python (FastAPI) output exactly to 6 decimal places ($0.814864$).
+* **Input:** 10-feature vector → **Output:** fraud probability
+* **Consistency check:** the C++ output is compared against the Python reference value (`0.814864`) with a tolerance of `1e-5`. The program exits with an error if they don't match.
 
-## 📊 The Physics of Performance: Cache Locality
-To demonstrate the importance of hardware-aware programming, I implemented a benchmark comparing two different ways of traversing a 400MB matrix ($10,000 \times 10,000$ elements).
+## 📊 Cache Locality Benchmark
+The benchmark sums a 400 MB matrix (`10,000 × 10,000` floats) three ways. Each variant gets one warmup run, then the median of 5 timed runs is reported.
 
-| Access Pattern | Execution Time | Context |
-| :--- | :--- | :--- |
-| **Row-Major** | 376.8 ms | **Cache-Friendly:** Follows C++ memory layout. |
-| **Column-Major** | 428.3 ms | **Cache-Killer:** Forces constant RAM fetches. |
+| Access Pattern | Time | Speed vs row-major |
+| :--- | ---: | ---: |
+| **Row-major, 1 thread** | 143 ms | 1.0x |
+| **Column-major, 1 thread** | 790 ms | **5.5x slower** |
+| **Row-major, OpenMP (2 threads)** | 73 ms | **2.0x faster** |
 
-### Key Insight:
-Even with modern **Hardware Prefetching**, the Column-Major access was **1.14x slower**. This proves that high-performance ML models must be designed with the CPU's L1/L2 cache hierarchy in mind to avoid "Memory Walls."
+*Measured on a 2-vCPU Linux VM, GCC, Release build. Your numbers will vary with hardware.*
+
+### Why it matters
+* **Row-major** traversal reads memory sequentially, matching how C++ stores the matrix. Each 64-byte cache line serves 16 floats, and the hardware prefetcher keeps the next lines arriving in time.
+* **Column-major** traversal jumps 40 KB between consecutive reads. Almost every access touches a new cache line, so most of each line fetched from RAM is wasted.
+* **OpenMP** splits the rows across cores with a `reduction`, which scales nearly linearly here.
+
+The same principle explains why ML frameworks care about tensor layouts (NCHW vs NHWC), contiguous memory, and tiled matrix multiplication.
 
 ## 🚀 How to Build
+1. Download an [ONNX Runtime release](https://github.com/microsoft/onnxruntime/releases) for your platform and extract it into `onnxruntime/` at the repo root (or pass `-DONNXRUNTIME_ROOT=/path/to/it`).
+2. Build and run:
+
 ```bash
-mkdir build && cd build
-cmake ..
-cmake --build . --config Release
-.\Release\benchmark_app.exe
+cmake -S . -B build
+cmake --build build --config Release
+
+# Linux / macOS
+./build/benchmark_app
+
+# Windows
+.\build\Release\benchmark_app.exe
+```
+
+The model path is built in at compile time, so the binary runs from any directory. You can also pass a different model path as the first argument.
